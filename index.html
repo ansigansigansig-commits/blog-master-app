@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="블로그마스터" />
+<meta name="theme-color" content="#c4704b" />
+<title>블로그마스터</title>
+<style>
+:root{--br:#8a4b32;--tc:#c4704b;--bg:#faf8f5;--w:#fff;--cream:#efe7df;--sand:#e0d3c7;--wg:#8b7d70;--lg:#b8a99b;--sg:#7a8b6f}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:-apple-system,'Apple SD Gothic Neo',sans-serif;background:var(--bg);color:#2c2420;line-height:1.7;padding-bottom:40px}
+header{background:var(--tc);color:#fff;padding:16px 18px;position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:8px;font-weight:700;font-size:17px}
+.wrap{max-width:640px;margin:0 auto;padding:16px}
+label{display:block;font-size:13px;font-weight:600;color:var(--br);margin:16px 0 6px}
+.hint{font-weight:400;color:var(--wg);font-size:12px}
+input,textarea,select{width:100%;padding:13px;border:1.5px solid var(--sand);border-radius:12px;font-size:16px;font-family:inherit;background:var(--w);color:inherit}
+textarea{min-height:110px;resize:vertical}
+.seg{display:flex;gap:8px;margin-top:6px}
+.seg button{flex:1;padding:11px;border:1.5px solid var(--sand);border-radius:12px;background:var(--w);color:var(--wg);font-size:14px;font-weight:600}
+.seg button.on{background:var(--tc);color:#fff;border-color:var(--tc)}
+.btn{width:100%;padding:15px;border:none;border-radius:12px;background:var(--tc);color:#fff;font-size:16px;font-weight:700;margin-top:20px}
+.btn:disabled{opacity:.55}
+.btn.sec{background:var(--w);color:var(--br);border:1.5px solid var(--sand)}
+.card{background:var(--w);border:1px solid var(--cream);border-radius:14px;padding:16px;margin-top:16px;white-space:pre-wrap;word-break:keep-all;font-size:15px}
+.status{text-align:center;color:var(--wg);font-size:13px;margin-top:16px;min-height:20px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--cream);border-top-color:var(--tc);border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+.hidden{display:none}
+.copybar{display:flex;gap:8px;margin-top:12px}
+.copybar button{flex:1;padding:11px;border:1.5px solid var(--sand);border-radius:10px;background:var(--w);color:var(--br);font-size:13px;font-weight:600}
+.tag{display:inline-block;background:rgba(196,112,75,.1);color:var(--br);padding:2px 8px;border-radius:6px;font-size:11px;margin:2px}
+</style>
+</head>
+<body>
+<header>📝 블로그마스터</header>
+<div class="wrap">
+
+  <!-- 입력 -->
+  <div id="stepInput">
+    <label>주제 / 키워드 <span class="hint">예: 제주 애월 오션뷰 카페</span></label>
+    <input id="kw" placeholder="어떤 곳을 다녀오셨나요?" />
+    <label>경험 메모 <span class="hint">간단해도 OK</span></label>
+    <textarea id="memo" placeholder="예)&#10;- 주말에 딸이랑 방문&#10;- 통유리 뷰가 좋았음&#10;- 주차 넉넉"></textarea>
+    <label>글 유형</label>
+    <div class="seg" id="typeSeg">
+      <button class="on" data-t="내돈내산">내돈내산</button>
+      <button data-t="체험단">체험단</button>
+    </div>
+    <button class="btn" id="btnStep1" onclick="submitStep1()">① 검색 + 추가 질문 받기</button>
+  </div>
+
+  <!-- 추가질문 + 답변 -->
+  <div id="stepQ" class="hidden">
+    <div class="card" id="questions"></div>
+    <label>💬 추가 답변 <span class="hint">위 질문에 답할수록 좋은 글이 나와요</span></label>
+    <textarea id="answer" style="min-height:150px" placeholder="질문에 대한 답을 적어주세요"></textarea>
+    <button class="btn" id="btnStep2" onclick="submitStep2()">② 블로그 글 완성하기</button>
+  </div>
+
+  <!-- 결과 -->
+  <div id="stepResult" class="hidden">
+    <div class="copybar">
+      <button onclick="copyAll()">📋 전체 복사</button>
+      <button onclick="reset()">✍️ 새 글</button>
+    </div>
+    <div class="card" id="result"></div>
+  </div>
+
+  <div class="status" id="status"></div>
+</div>
+
+<script>
+const FB = "https://sdgc-ae7f9-default-rtdb.asia-southeast1.firebasedatabase.app";
+const NODE = "blogmaster/requests";
+let wtype = "내돈내산", lastInputs = {};
+
+document.querySelectorAll('#typeSeg button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#typeSeg button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); wtype=b.dataset.t;
+});
+
+function setStatus(msg, busy){ document.getElementById('status').innerHTML = busy?`<span class="spin"></span>${msg}`:(msg||''); }
+
+async function fbPut(path, data){
+  await fetch(`${FB}/${path}.json`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+}
+async function fbGet(path){
+  const r = await fetch(`${FB}/${path}.json`); const t = await r.text();
+  return (t && t!=='null') ? JSON.parse(t) : null;
+}
+
+// 요청 제출 후 결과가 나올 때까지 폴링
+async function runRequest(payload){
+  const rid = 'r'+Date.now()+Math.floor(Math.random()*1000);
+  payload.status='pending'; payload.created=Date.now();
+  await fbPut(`${NODE}/${rid}`, payload);
+  for(let i=0;i<200;i++){   // 최대 ~10분
+    await new Promise(r=>setTimeout(r, 3000));
+    const req = await fbGet(`${NODE}/${rid}`);
+    if(!req) continue;
+    if(req.progress) setStatus(req.progress, true);
+    if(req.status==='done') return req.content||'';
+    if(req.status==='error') throw new Error(req.error||'생성 오류');
+  }
+  throw new Error('시간 초과 — 맥 워커가 켜져 있는지 확인하세요');
+}
+
+async function submitStep1(){
+  const kw=document.getElementById('kw').value.trim();
+  const memo=document.getElementById('memo').value.trim();
+  if(!kw && !memo){ setStatus('주제나 메모를 입력해주세요'); return; }
+  lastInputs={keyword:kw, memo:memo, type:wtype};
+  document.getElementById('btnStep1').disabled=true;
+  setStatus('검색하고 질문을 만드는 중... (30초~1분)', true);
+  try{
+    const out = await runRequest({tab:'write', step:1, inputs:lastInputs});
+    document.getElementById('questions').textContent = out;
+    document.getElementById('stepInput').classList.add('hidden');
+    document.getElementById('stepQ').classList.remove('hidden');
+    setStatus('');
+  }catch(e){ setStatus('⚠️ '+e.message); }
+  document.getElementById('btnStep1').disabled=false;
+}
+
+async function submitStep2(){
+  const answer=document.getElementById('answer').value.trim();
+  const inputs={...lastInputs, answer:answer};
+  document.getElementById('btnStep2').disabled=true;
+  setStatus('블로그 글을 쓰는 중... (2~5분, 화면 꺼져도 됨)', true);
+  try{
+    const out = await runRequest({tab:'write', step:2, inputs:inputs});
+    document.getElementById('result').textContent = out;
+    document.getElementById('stepQ').classList.add('hidden');
+    document.getElementById('stepResult').classList.remove('hidden');
+    setStatus('✅ 완성! 전체 복사해서 네이버에 붙여넣으세요');
+  }catch(e){ setStatus('⚠️ '+e.message); }
+  document.getElementById('btnStep2').disabled=false;
+}
+
+function copyAll(){
+  const t=document.getElementById('result').textContent;
+  navigator.clipboard.writeText(t).then(()=>setStatus('📋 복사됐어요'));
+}
+function reset(){
+  document.getElementById('stepResult').classList.add('hidden');
+  document.getElementById('stepInput').classList.remove('hidden');
+  document.getElementById('kw').value=''; document.getElementById('memo').value='';
+  document.getElementById('answer').value=''; setStatus('');
+}
+</script>
+</body>
+</html>
