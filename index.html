@@ -57,6 +57,10 @@ textarea{min-height:110px;resize:vertical}
     <div class="card" id="questions"></div>
     <label>💬 추가 답변 <span class="hint">위 질문에 답할수록 좋은 글이 나와요</span></label>
     <textarea id="answer" style="min-height:150px" placeholder="질문에 대한 답을 적어주세요"></textarea>
+    <label style="display:flex;align-items:center;gap:10px;margin-top:16px">
+      <input type="checkbox" id="autoUpload" checked style="width:22px;height:22px">
+      <span>maymooon에 <b>비공개로 자동 저장</b> (네이버 앱에서 사진 넣고 발행)</span>
+    </label>
     <button class="btn" id="btnStep2" onclick="submitStep2()">② 블로그 글 완성하기</button>
   </div>
 
@@ -95,6 +99,7 @@ async function fbGet(path){
 // 요청 제출 후 결과가 나올 때까지 폴링
 async function runRequest(payload){
   const rid = 'r'+Date.now()+Math.floor(Math.random()*1000);
+  window._lastRid = rid;
   payload.status='pending'; payload.created=Date.now();
   await fbPut(`${NODE}/${rid}`, payload);
   for(let i=0;i<200;i++){   // 최대 ~10분
@@ -127,16 +132,31 @@ async function submitStep1(){
 
 async function submitStep2(){
   const answer=document.getElementById('answer').value.trim();
+  const autoUpload=document.getElementById('autoUpload').checked;
   const inputs={...lastInputs, answer:answer};
   document.getElementById('btnStep2').disabled=true;
   setStatus('블로그 글을 쓰는 중... (2~5분, 화면 꺼져도 됨)', true);
   try{
-    const out = await runRequest({tab:'write', step:2, inputs:inputs});
+    const out = await runRequest({tab:'write', step:2, inputs:inputs, autoUpload:autoUpload});
+    const rid = window._lastRid;
     document.getElementById('result').textContent = out;
     document.getElementById('stepQ').classList.add('hidden');
     document.getElementById('stepResult').classList.remove('hidden');
-    setStatus('✅ 완성! 전체 복사해서 네이버에 붙여넣으세요');
-  }catch(e){ setStatus('⚠️ '+e.message); }
+    // 글은 이미 완성/표시됨(안전). 비공개 저장은 그 위에 얹는 단계라 상태만 폴링.
+    if(autoUpload){
+      setStatus('✅ 글 완성! maymooon에 비공개 저장 중...', true);
+      for(let i=0;i<60;i++){
+        await new Promise(r=>setTimeout(r,3000));
+        const us = await fbGet(`${NODE}/${rid}/upload_status`);
+        const msg = await fbGet(`${NODE}/${rid}/upload_msg`);
+        if(us==='uploaded'){ setStatus('✅ '+(msg||'maymooon에 비공개 저장됨')); break; }
+        if(us==='login_needed'){ setStatus('⚠️ '+(msg||'maymooon 로그인 필요') + ' (아래 글은 그대로 복사 가능)'); break; }
+        if(us==='error'){ setStatus('⚠️ '+(msg||'저장 실패') + ' (아래 글 복사해서 쓰세요)'); break; }
+      }
+    } else {
+      setStatus('✅ 완성! 전체 복사해서 네이버에 붙여넣으세요');
+    }
+  }catch(e){ setStatus('⚠️ '+e.message + ' (맥 워커 확인)'); }
   document.getElementById('btnStep2').disabled=false;
 }
 
