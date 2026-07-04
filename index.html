@@ -35,8 +35,16 @@ textarea{min-height:110px;resize:vertical}
 </style>
 </head>
 <body>
-<header>📝 블로그마스터</header>
+<header>📝 블로그마스터 <span style="flex:1"></span><button onclick="toggleHistory()" style="background:rgba(255,255,255,.2);border:none;color:#fff;font-size:13px;padding:7px 12px;border-radius:10px;font-weight:600">📋 지난 글</button></header>
 <div class="wrap">
+
+  <!-- 지난 글 목록 -->
+  <div id="stepHistory" class="hidden">
+    <div style="font-size:13px;color:var(--wg);margin:8px 0">최근 만든 글 (탭하면 전체 보기)</div>
+    <div id="historyList"></div>
+    <button class="btn sec" onclick="closeHistory()" style="margin-top:12px">← 새 글 쓰기로</button>
+  </div>
+
 
   <!-- 입력 -->
   <div id="stepInput">
@@ -102,15 +110,60 @@ async function runRequest(payload){
   window._lastRid = rid;
   payload.status='pending'; payload.created=Date.now();
   await fbPut(`${NODE}/${rid}`, payload);
-  for(let i=0;i<200;i++){   // 최대 ~10분
+  // 복구용: 진행중 요청을 기억(화면 꺼져 폴링 멈춰도 다시 열면 이어받음)
+  localStorage.setItem('bm_rid', rid);
+  localStorage.setItem('bm_kind', payload.step===2?'result':'questions');
+  return await pollUntilDone(rid);
+}
+
+// status가 done/error 될 때까지 폴링(화면 복귀 시 재호출로 이어받기 가능)
+async function pollUntilDone(rid){
+  for(let i=0;i<300;i++){
     await new Promise(r=>setTimeout(r, 3000));
     const req = await fbGet(`${NODE}/${rid}`);
     if(!req) continue;
     if(req.progress) setStatus(req.progress, true);
-    if(req.status==='done') return req.content||'';
+    if(req.status==='done'){ return req.content||''; }
     if(req.status==='error') throw new Error(req.error||'생성 오류');
   }
   throw new Error('시간 초과 — 맥 워커가 켜져 있는지 확인하세요');
+}
+
+// 앱 다시 열면: 아까 만들던 글이 완성돼 있는지 확인해 복구
+async function recoverLast(){
+  const rid = localStorage.getItem('bm_rid');
+  if(!rid) return;
+  const req = await fbGet(`${NODE}/${rid}`);
+  if(!req) return;
+  const kind = localStorage.getItem('bm_kind');
+  if(req.status==='done' && req.content){
+    if(kind==='result'){
+      window._lastRid = rid;
+      document.getElementById('result').textContent = req.content;
+      document.getElementById('stepInput').classList.add('hidden');
+      document.getElementById('stepQ').classList.add('hidden');
+      document.getElementById('stepResult').classList.remove('hidden');
+      let m = req.upload_status ? (req.upload_msg||req.upload_status) : '전체 복사해서 쓰세요';
+      setStatus('✅ (복구됨) 아까 만든 글이에요 — '+m);
+    } else {
+      document.getElementById('questions').textContent = req.content;
+      lastInputs = req.inputs || {};
+      document.getElementById('stepInput').classList.add('hidden');
+      document.getElementById('stepQ').classList.remove('hidden');
+      setStatus('✅ (복구됨) 추가 질문이에요');
+    }
+  } else if(req.status==='pending' || req.status==='processing'){
+    // 아직 생성 중이면 이어서 폴링
+    setStatus('아까 만들던 글 이어받는 중...', true);
+    window._lastRid = rid;
+    try{
+      const out = await pollUntilDone(rid);
+      document.getElementById('result').textContent = out;
+      document.getElementById('stepInput').classList.add('hidden');
+      document.getElementById('stepResult').classList.remove('hidden');
+      setStatus('✅ 완성!');
+    }catch(e){ setStatus('⚠️ '+e.message); }
+  }
 }
 
 async function submitStep1(){
@@ -170,6 +223,44 @@ function reset(){
   document.getElementById('kw').value=''; document.getElementById('memo').value='';
   document.getElementById('answer').value=''; setStatus('');
 }
+
+/* ===== 지난 글 ===== */
+async function toggleHistory(){
+  const h=document.getElementById('stepHistory');
+  if(!h.classList.contains('hidden')){ closeHistory(); return; }
+  ['stepInput','stepQ','stepResult'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+  h.classList.remove('hidden');
+  document.getElementById('historyList').innerHTML='<div class="status"><span class="spin"></span> 불러오는 중...</div>';
+  const all = await fbGet(NODE) || {};
+  const items = Object.entries(all)
+    .filter(([id,r])=>r && r.tab==='write' && r.step===2 && r.status==='done' && r.content)
+    .sort((a,b)=>(b[1].created||0)-(a[1].created||0)).slice(0,30);
+  if(!items.length){ document.getElementById('historyList').innerHTML='<div class="status">아직 만든 글이 없어요</div>'; return; }
+  let html='';
+  items.forEach(([id,r])=>{
+    const title=((r.content.match(/【\s*1\s*위\s*】\s*([^\n—\-]+)/)||[])[1]) || (r.inputs&&r.inputs.keyword) || '제목없음';
+    const d=r.created?new Date(r.created).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    html+=`<div onclick="showHistoryItem('${id}')" style="padding:14px;background:var(--w);border:1px solid var(--cream);border-radius:12px;margin-bottom:8px"><div style="font-size:14px;font-weight:600;color:var(--br)">${title.trim().slice(0,40)}</div><div style="font-size:11px;color:var(--lg);margin-top:3px">${d}</div></div>`;
+  });
+  document.getElementById('historyList').innerHTML=html;
+}
+async function showHistoryItem(id){
+  const r=await fbGet(`${NODE}/${id}`);
+  if(!r||!r.content)return;
+  window._lastRid=id;
+  document.getElementById('result').textContent=r.content;
+  document.getElementById('stepHistory').classList.add('hidden');
+  document.getElementById('stepResult').classList.remove('hidden');
+  setStatus(r.upload_status?('저장상태: '+(r.upload_msg||r.upload_status)):'');
+}
+function closeHistory(){
+  document.getElementById('stepHistory').classList.add('hidden');
+  document.getElementById('stepResult').classList.add('hidden');
+  document.getElementById('stepQ').classList.add('hidden');
+  document.getElementById('stepInput').classList.remove('hidden');
+}
+// 앱 열릴 때: 아까 만들던 글 자동 복구
+window.addEventListener('load', ()=>{ try{ recoverLast(); }catch(e){} });
 </script>
 </body>
 </html>
