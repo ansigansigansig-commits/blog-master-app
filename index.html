@@ -26,6 +26,7 @@ textarea{min-height:110px;resize:vertical}
 .btn.sec{background:var(--w);color:var(--br);border:1.5px solid var(--sand)}
 .card{background:var(--w);border:1px solid var(--cream);border-radius:14px;padding:16px;margin-top:16px;white-space:pre-wrap;word-break:keep-all;font-size:15px}
 .status{text-align:center;color:var(--wg);font-size:13px;margin-top:16px;min-height:20px}
+.status.warn{color:#805d18}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--cream);border-top-color:var(--tc);border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
 .hidden{display:none}
@@ -94,7 +95,30 @@ document.querySelectorAll('#typeSeg button').forEach(b=>b.onclick=()=>{
   b.classList.add('on'); wtype=b.dataset.t;
 });
 
-function setStatus(msg, busy){ document.getElementById('status').innerHTML = busy?`<span class="spin"></span>${msg}`:(msg||''); }
+function setStatus(msg, busy=false, warning=false){
+  const el=document.getElementById('status');
+  el.classList.toggle('warn',!!warning);
+  el.replaceChildren();
+  if(busy){const spin=document.createElement('span');spin.className='spin';el.appendChild(spin);}
+  if(msg)el.append(document.createTextNode(String(msg)));
+}
+function showBusinessInfo(info, prefix=''){
+  if(!info||typeof info!=='object'||!info.message)return false;
+  setStatus(prefix+String(info.message),false,info.status==='needs_info');
+  return true;
+}
+function historyBusinessLabel(info){return info&&info.status==='needs_info'?' · 업체정보 확인 대기':'';}
+function showTerminalStatus(req, prefix=''){
+  const info=req&&req.businessInfo;
+  if(info&&info.status==='needs_info')return showBusinessInfo(info,prefix);
+  const base=info&&info.message?prefix+String(info.message):prefix;
+  const join=(message)=>base?base+' · '+message:message;
+  if(req&&req.upload_status==='needs_info'){setStatus(join('업체정보 확인 대기: '+(req.upload_msg||'확인 후 비공개 저장을 진행합니다.')),false,true);return true;}
+  if(req&&req.upload_status==='pending_approval'){setStatus(join('승인 대기: '+(req.upload_msg||'maymooon 비공개 저장 승인을 기다리고 있어요.')));return true;}
+  if(req&&req.upload_status==='login_needed'){setStatus(join('로그인 필요: '+(req.upload_msg||'maymooon 로그인이 필요해요.')));return true;}
+  if(req&&req.upload_status==='error'){setStatus(join('저장 실패: '+(req.upload_msg||'아래 글은 그대로 복사할 수 있어요.')));return true;}
+  return showBusinessInfo(info,prefix);
+}
 
 async function fbPut(path, data){
   await fetch(`${FB}/${path}.json`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
@@ -122,6 +146,7 @@ async function pollUntilDone(rid){
     await new Promise(r=>setTimeout(r, 3000));
     const req = await fbGet(`${NODE}/${rid}`);
     if(!req) continue;
+    window._lastRequest=req;
     if(req.progress) setStatus(req.progress, true);
     if(req.status==='done'){ return req.content||''; }
     if(req.status==='error') throw new Error(req.error||'생성 오류');
@@ -135,6 +160,7 @@ async function recoverLast(){
   if(!rid) return;
   const req = await fbGet(`${NODE}/${rid}`);
   if(!req) return;
+  window._lastRequest=req;
   const kind = localStorage.getItem('bm_kind');
   if(req.status==='done' && req.content){
     if(kind==='result'){
@@ -143,8 +169,7 @@ async function recoverLast(){
       document.getElementById('stepInput').classList.add('hidden');
       document.getElementById('stepQ').classList.add('hidden');
       document.getElementById('stepResult').classList.remove('hidden');
-      let m = req.upload_status ? (req.upload_msg||req.upload_status) : '전체 복사해서 쓰세요';
-      setStatus('✅ (복구됨) 아까 만든 글이에요 — '+m);
+      if(!showTerminalStatus(req,'(복구됨) '))setStatus('✅ (복구됨) 아까 만든 글이에요 — 전체 복사해서 쓰세요');
     } else {
       document.getElementById('questions').textContent = req.content;
       lastInputs = req.inputs || {};
@@ -161,7 +186,7 @@ async function recoverLast(){
       document.getElementById('result').textContent = out;
       document.getElementById('stepInput').classList.add('hidden');
       document.getElementById('stepResult').classList.remove('hidden');
-      setStatus('✅ 완성!');
+      if(!showBusinessInfo(window._lastRequest&&window._lastRequest.businessInfo))setStatus('✅ 완성!');
     }catch(e){ setStatus('⚠️ '+e.message); }
   }
 }
@@ -195,22 +220,31 @@ async function submitStep2(){
     document.getElementById('result').textContent = out;
     document.getElementById('stepQ').classList.add('hidden');
     document.getElementById('stepResult').classList.remove('hidden');
+    const request=window._lastRequest||{};
+    if(request.businessInfo&&request.businessInfo.status==='needs_info'){
+      showTerminalStatus(request);
+      return;
+    }
     // 글은 이미 완성/표시됨(안전). 비공개 저장은 그 위에 얹는 단계라 상태만 폴링.
     if(autoUpload){
       setStatus('✅ 글 완성! maymooon에 비공개 저장 중...', true);
       for(let i=0;i<60;i++){
         await new Promise(r=>setTimeout(r,3000));
-        const us = await fbGet(`${NODE}/${rid}/upload_status`);
-        const msg = await fbGet(`${NODE}/${rid}/upload_msg`);
+        const latest=await fbGet(`${NODE}/${rid}`)||{};
+        window._lastRequest=latest;
+        const us=latest.upload_status;
+        const msg=latest.upload_msg;
+        if(us==='needs_info'){ setStatus('⚠️ '+(msg||'업체정보 확인 대기: 확인 후 비공개 저장을 진행합니다.'),false,true); break; }
         if(us==='uploaded'){ setStatus('✅ '+(msg||'maymooon에 비공개 저장됨')); break; }
+        if(us==='pending_approval'){ setStatus('승인 대기: '+(msg||'maymooon 비공개 저장 승인을 기다리고 있어요. 아래 글은 그대로 복사할 수 있어요.')); break; }
         if(us==='login_needed'){ setStatus('⚠️ '+(msg||'maymooon 로그인 필요') + ' (아래 글은 그대로 복사 가능)'); break; }
         if(us==='error'){ setStatus('⚠️ '+(msg||'저장 실패') + ' (아래 글 복사해서 쓰세요)'); break; }
       }
     } else {
-      setStatus('✅ 완성! 전체 복사해서 네이버에 붙여넣으세요');
+      if(!showBusinessInfo(request.businessInfo))setStatus('✅ 완성! 전체 복사해서 네이버에 붙여넣으세요');
     }
   }catch(e){ setStatus('⚠️ '+e.message + ' (맥 워커 확인)'); }
-  document.getElementById('btnStep2').disabled=false;
+  finally{ document.getElementById('btnStep2').disabled=false; }
 }
 
 function copyAll(){
@@ -240,7 +274,7 @@ async function toggleHistory(){
   items.forEach(([id,r])=>{
     const title=((r.content.match(/【\s*1\s*위\s*】\s*([^\n—\-]+)/)||[])[1]) || (r.inputs&&r.inputs.keyword) || '제목없음';
     const d=r.created?new Date(r.created).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    html+=`<div onclick="showHistoryItem('${id}')" style="padding:14px;background:var(--w);border:1px solid var(--cream);border-radius:12px;margin-bottom:8px"><div style="font-size:14px;font-weight:600;color:var(--br)">${title.trim().slice(0,40)}</div><div style="font-size:11px;color:var(--lg);margin-top:3px">${d}</div></div>`;
+    html+=`<div onclick="showHistoryItem('${id}')" style="padding:14px;background:var(--w);border:1px solid var(--cream);border-radius:12px;margin-bottom:8px"><div style="font-size:14px;font-weight:600;color:var(--br)">${escapeHtml(title.trim().slice(0,40))}</div><div style="font-size:11px;color:var(--lg);margin-top:3px">${d}${historyBusinessLabel(r.businessInfo)}</div></div>`;
   });
   document.getElementById('historyList').innerHTML=html;
 }
@@ -251,8 +285,9 @@ async function showHistoryItem(id){
   document.getElementById('result').textContent=r.content;
   document.getElementById('stepHistory').classList.add('hidden');
   document.getElementById('stepResult').classList.remove('hidden');
-  setStatus(r.upload_status?('저장상태: '+(r.upload_msg||r.upload_status)):'');
+  if(!showTerminalStatus(r))setStatus(r.upload_status?('저장상태: '+(r.upload_msg||r.upload_status)):'' );
 }
+function escapeHtml(value){return String(value||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function closeHistory(){
   document.getElementById('stepHistory').classList.add('hidden');
   document.getElementById('stepResult').classList.add('hidden');
